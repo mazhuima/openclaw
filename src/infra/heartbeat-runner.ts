@@ -28,6 +28,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -2037,15 +2038,19 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    // In message_tool_only mode, raw model output produced without the heartbeat
+    // response tool must not leak to the channel. Suppress it as if empty.
+    // Payloads marked with deliverDespiteSourceReplySuppression — error notices
+    // and system messages — bypass this guard so critical failures still surface.
+    const suppressRawReply =
+      usesHeartbeatResponseTool &&
+      !heartbeatToolResponse &&
+      getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression !== true;
     if (
       !heartbeatToolResponse &&
-      (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload) || suppressRawReply) &&
       reasoningPayloads.length === 0
     ) {
-      // No main reply to send. Only treat this as an empty heartbeat when there
-      // is also no opt-in reasoning to deliver; otherwise fall through so the
-      // includeReasoning Thinking payload is still sent (mirrors the
-      // shouldSkipMain guard below). See #92242 follow-up.
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
